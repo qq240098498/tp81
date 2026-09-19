@@ -13,9 +13,10 @@ const MAX_NOTE_LENGTH = 200;
 const UNASSIGNED = '未指定';
 const STATUSES = ['在用', '待升', '已弃用'];
 
-// 初始数据：三个项目、十八条依赖登记。里面故意留了几种情况：
+// 初始数据：三个项目、十八条依赖登记、三条依赖关系。里面故意留了几种情况：
 // 同一个依赖在两个项目里版本不一致、几条没写责任人、一条没写许可、
-// 一条停在待升状态很久、一条已经弃用，另一种是同一依赖只在单个项目里出现过
+// 一条停在待升状态很久、一条已经弃用，另一种是同一依赖只在单个项目里出现过；
+// 关系上留了一条两层链（spring-boot → internal-sdk → jackson-databind）方便看按层展开
 function seedData() {
   return {
     projects: [
@@ -42,6 +43,11 @@ function seedData() {
       { id: 'dep-2016', projectId: 'proj-1003', name: 'typescript', version: '5.2.2', license: 'Apache-2.0', owner: '王凯', status: '在用', note: '编译与类型检查', createdAt: '2026-08-28T04:10:00.000Z', updatedAt: '2026-09-08T07:40:00.000Z' },
       { id: 'dep-2017', projectId: 'proj-1003', name: 'vite', version: '5.0.10', license: 'MIT', owner: '王凯', status: '在用', note: '本地构建', createdAt: '2026-08-28T04:12:00.000Z', updatedAt: '2026-09-08T07:42:00.000Z' },
       { id: 'dep-2018', projectId: 'proj-1003', name: 'xml-parser', version: '0.9.2', license: 'GPL-3.0', owner: '', status: '在用', note: '解析对账文件用，许可需要复核', createdAt: '2026-09-01T02:00:00.000Z', updatedAt: '2026-09-08T07:50:00.000Z' },
+    ],
+    relations: [
+      { id: 'rel-3001', fromDepId: 'dep-2001', toDepId: 'dep-2005', minVersion: '0.4.0', createdAt: '2026-09-12T02:00:00.000Z' },
+      { id: 'rel-3002', fromDepId: 'dep-2005', toDepId: 'dep-2004', minVersion: '2.10.0', createdAt: '2026-09-12T02:05:00.000Z' },
+      { id: 'rel-3003', fromDepId: 'dep-2017', toDepId: 'dep-2016', minVersion: '5.0.0', createdAt: '2026-09-12T02:10:00.000Z' },
     ],
   };
 }
@@ -78,7 +84,20 @@ function normalizeDep(item, fallbackIndex) {
   };
 }
 
-// 整份数据保证 projects 与 deps 结构一致，指向不存在项目的登记一律丢掉
+// 把单条依赖关系整理成固定结构
+function normalizeRelation(item, fallbackIndex) {
+  const source = item && typeof item === 'object' ? item : {};
+  return {
+    id: typeof source.id === 'string' && source.id ? source.id : `rel-restored-${fallbackIndex + 1}`,
+    fromDepId: typeof source.fromDepId === 'string' ? source.fromDepId : '',
+    toDepId: typeof source.toDepId === 'string' ? source.toDepId : '',
+    minVersion: typeof source.minVersion === 'string' ? source.minVersion.trim() : '',
+    createdAt: typeof source.createdAt === 'string' && source.createdAt ? source.createdAt : new Date().toISOString(),
+  };
+}
+
+// 整份数据保证 projects、deps 与 relations 结构一致：
+// 指向不存在项目的登记一律丢掉，指向不存在依赖的关系也一律丢掉
 function normalize(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
   const seed = seedData();
@@ -106,7 +125,27 @@ function normalize(raw) {
         .filter((item) => known.has(item.projectId))
     : [];
 
-  return { projects: dedupedProjects, deps };
+  // 关系两端都必须是还在台账里的依赖，自己指自己的直接丢掉，重复的关系只留一条
+  const knownDeps = new Set(deps.map((item) => item.id));
+  const relations = Array.isArray(source.relations)
+    ? source.relations
+        .map((item, index) => normalizeRelation(item, index))
+        .filter((item) => item.id && item.fromDepId && item.toDepId && item.fromDepId !== item.toDepId)
+        .filter((item) => knownDeps.has(item.fromDepId) && knownDeps.has(item.toDepId))
+    : seed.relations;
+
+  const seenRelIds = new Set();
+  const seenRelPairs = new Set();
+  const dedupedRelations = [];
+  relations.forEach((item) => {
+    const pair = `${item.fromDepId}→${item.toDepId}`;
+    if (seenRelIds.has(item.id) || seenRelPairs.has(pair)) return;
+    seenRelIds.add(item.id);
+    seenRelPairs.add(pair);
+    dedupedRelations.push(item);
+  });
+
+  return { projects: dedupedProjects, deps, relations: dedupedRelations };
 }
 
 // 读取数据文件：文件缺失或内容损坏时回落到初始数据并立刻补写
@@ -136,6 +175,7 @@ module.exports = {
   normalize,
   normalizeProject,
   normalizeDep,
+  normalizeRelation,
   STATUSES,
   UNASSIGNED,
   MAX_NAME_LENGTH,

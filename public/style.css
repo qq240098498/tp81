@@ -341,3 +341,69 @@ label.full input {
   display: flex;
   gap: 10px;
 }
+
+/* 依赖关系区 */
+.rel-chip {
+  border-bottom: 1px dotted var(--ink-soft);
+  cursor: help;
+}
+
+#relation-form label,
+#closure-form label {
+  min-width: 220px;
+}
+
+#relation-form select,
+#closure-form select {
+  max-width: 320px;
+}
+
+#relation-min-version {
+  width: 140px;
+}
+
+.closure {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+
+#closure-result {
+  margin-top: 12px;
+}
+
+#closure-result:empty {
+  margin-top: 0;
+}
+
+.closure-summary {
+  margin: 0 0 8px;
+  color: var(--ink-soft);
+}
+
+.closure-layer h4 {
+  margin: 12px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.closure-layer ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.closure-layer li {
+  padding: 2px 0;
+}
+
+.tag.layer {
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-right: 6px;
+}
+
+.closure-via {
+  margin-left: 8px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}

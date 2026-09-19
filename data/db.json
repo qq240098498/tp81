@@ -239,5 +239,21 @@
       "createdAt": "2026-09-01T02:00:00.000Z",
       "updatedAt": "2026-09-08T07:50:00.000Z"
     }
+  ],
+  "relations": [
+    {
+      "id": "rel-3001",
+      "fromDepId": "dep-2001",
+      "toDepId": "dep-2005",
+      "minVersion": "0.4.0",
+      "createdAt": "2026-09-12T02:00:00.000Z"
+    },
+    {
+      "id": "rel-3003",
+      "fromDepId": "dep-2017",
+      "toDepId": "dep-2016",
+      "minVersion": "5.0.0",
+      "createdAt": "2026-09-12T02:10:00.000Z"
+    }
   ]
 }

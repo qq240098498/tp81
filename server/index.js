@@ -68,6 +68,15 @@ app.get('/api/deps/:id', (req, res) => {
   }
 });
 
+// 从一条依赖出发，按层展开它一路往下需要的完整清单
+app.get('/api/deps/:id/closure', (req, res) => {
+  try {
+    res.json(api.depClosure(req.params.id));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 app.patch('/api/deps/:id', (req, res) => {
   try {
     res.json(api.updateDep(req.params.id, req.body));
@@ -79,6 +88,27 @@ app.patch('/api/deps/:id', (req, res) => {
 app.delete('/api/deps/:id', (req, res) => {
   try {
     res.json(api.deleteDep(req.params.id));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// 依赖关系：谁需要谁、最低版本要求多少
+app.get('/api/relations', (_req, res) => {
+  res.json(api.listRelations());
+});
+
+app.post('/api/relations', (req, res) => {
+  try {
+    res.status(201).json(api.createRelation(req.body));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+app.delete('/api/relations/:id', (req, res) => {
+  try {
+    res.json(api.deleteRelation(req.params.id));
   } catch (err) {
     sendError(res, err);
   }

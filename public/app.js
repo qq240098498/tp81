@@ -5,6 +5,10 @@ const state = {
   deps: [],
   licenses: [],
   statuses: [],
+  relations: [],
+  relationDeps: [],
+  closure: null,
+  closureDepId: '',
   editingId: '',
 };
 
@@ -122,6 +126,16 @@ async function loadDeps() {
   renderDeps();
 }
 
+// 关系清单与依赖登记分开拉：关系区不受依赖区筛选条件影响，始终看全量
+async function loadRelations() {
+  const payload = await request('/api/relations');
+  state.relations = payload.relations || [];
+  state.relationDeps = payload.deps || [];
+  renderRelationOptions();
+  renderRelations();
+  renderDeps();
+}
+
 function renderProjects() {
   const body = el('project-body');
   body.innerHTML = state.projects.map((item) => `<tr>
@@ -180,6 +194,30 @@ function projectName(projectId) {
   return found ? found.name : projectId;
 }
 
+// 依赖名下拉选项与单元格提示都用「项目 / 名称 @版本」这个口径，同名依赖分属不同项目时也能分清
+function depLabel(dep) {
+  return `${projectName(dep.projectId)} / ${dep.name} @${dep.version}`;
+}
+
+// 「需要」列：这条依赖自己需要谁，带上最低版本；「被需要」列：谁需要它
+function needsCell(depId) {
+  const list = state.relations.filter((rel) => rel.fromDepId === depId);
+  if (!list.length) return '<span class="missing">无</span>';
+  return list.map((rel) => {
+    const tip = `${projectName(rel.toProjectId)} / ${rel.toName}，最低版本 ≥${rel.minVersion}`;
+    return `<span class="rel-chip" title="${escapeHtml(tip)}">${escapeHtml(rel.toName)}≥${escapeHtml(rel.minVersion)}</span>`;
+  }).join('、');
+}
+
+function neededByCell(depId) {
+  const list = state.relations.filter((rel) => rel.toDepId === depId);
+  if (!list.length) return '<span class="missing">无</span>';
+  return list.map((rel) => {
+    const tip = `${projectName(rel.fromProjectId)} / ${rel.fromName}，要求 ≥${rel.minVersion}`;
+    return `<span class="rel-chip" title="${escapeHtml(tip)}">${escapeHtml(rel.fromName)}</span>`;
+  }).join('、');
+}
+
 function renderDeps() {
   const body = el('dep-body');
   body.innerHTML = state.deps.map((item) => {
@@ -191,6 +229,8 @@ function renderDeps() {
       <td>${item.license ? escapeHtml(item.license) : '<span class="missing">未填</span>'}</td>
       <td>${item.owner ? escapeHtml(item.owner) : '<span class="missing">未指定</span>'}</td>
       <td><span class="tag ${statusTag}">${escapeHtml(item.status)}</span></td>
+      <td>${needsCell(item.id)}</td>
+      <td>${neededByCell(item.id)}</td>
       <td class="note-cell">${escapeHtml(item.note)}</td>
       <td class="mono">${escapeHtml(formatTime(item.updatedAt))}</td>
       <td class="actions">
@@ -200,6 +240,133 @@ function renderDeps() {
     </tr>`;
   }).join('');
   el('dep-empty').classList.toggle('hidden', state.deps.length > 0);
+}
+
+// 关系表单与展开工具里的三个下拉框都列全部依赖，尽量保住当前选中项
+function fillDepSelect(select, keep) {
+  const current = keep === undefined ? select.value : keep;
+  select.innerHTML = state.relationDeps
+    .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(depLabel(item))}</option>`)
+    .join('');
+  if (state.relationDeps.some((item) => item.id === current)) select.value = current;
+}
+
+function renderRelationOptions() {
+  fillDepSelect(el('relation-from'));
+  fillDepSelect(el('relation-to'));
+  fillDepSelect(el('closure-dep'), state.closureDepId || el('closure-dep').value);
+}
+
+function renderRelations() {
+  const body = el('relation-body');
+  body.innerHTML = state.relations.map((rel) => `<tr>
+      <td>${escapeHtml(projectName(rel.fromProjectId))} / <span class="mono">${escapeHtml(rel.fromName)}</span></td>
+      <td>${escapeHtml(projectName(rel.toProjectId))} / <span class="mono">${escapeHtml(rel.toName)}</span></td>
+      <td class="mono">≥${escapeHtml(rel.minVersion)}</td>
+      <td class="mono">${escapeHtml(formatTime(rel.createdAt))}</td>
+      <td class="actions">
+        <button type="button" class="link danger" data-relation-delete="${escapeHtml(rel.id)}">删除</button>
+      </td>
+    </tr>`).join('');
+  el('relation-empty').classList.toggle('hidden', state.relations.length > 0);
+}
+
+// 把展开结果按层画出来：每层一个小组，每条依赖带层号标记与「从哪一层带上来」
+function renderClosure() {
+  const box = el('closure-result');
+  const data = state.closure;
+  if (!data) {
+    box.innerHTML = '';
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  const rootLabel = depLabel(data.root);
+  if (!data.items.length) {
+    box.innerHTML = `<p class="closure-summary"><strong>${escapeHtml(rootLabel)}</strong> 没有登记需要其它依赖</p>`;
+    return;
+  }
+
+  const layers = new Map();
+  data.items.forEach((item) => {
+    if (!layers.has(item.layer)) layers.set(item.layer, []);
+    layers.get(item.layer).push(item);
+  });
+
+  const sections = Array.from(layers.entries()).map(([layer, items]) => {
+    const rows = items.map((item) => {
+      const via = item.introducedBy.map((by) => `${by.name}（要求 ≥${by.minVersion}）`).join('、');
+      const viaText = layer === 1 ? `由 ${via} 直接需要` : `由第 ${layer - 1} 层的 ${via} 带入`;
+      return `<li>
+        <span class="tag layer">第 ${layer} 层</span>
+        <span class="mono">${escapeHtml(item.name)} @${escapeHtml(item.version)}</span>
+        （${escapeHtml(projectName(item.projectId))}）
+        <span class="closure-via">${escapeHtml(viaText)}</span>
+      </li>`;
+    }).join('');
+    const title = layer === 1 ? `第 ${layer} 层（直接需要）` : `第 ${layer} 层`;
+    return `<div class="closure-layer"><h4>${title}</h4><ul>${rows}</ul></div>`;
+  }).join('');
+
+  box.innerHTML = `<p class="closure-summary">从 <strong>${escapeHtml(rootLabel)}</strong> 出发，一路往下共需要 ${data.total} 条依赖，最深 ${data.maxLayer} 层；同一条依赖只列一次，保留它最早出现的那一层</p>${sections}`;
+}
+
+async function refreshClosure() {
+  if (!state.closureDepId) return;
+  try {
+    state.closure = await request(`/api/deps/${encodeURIComponent(state.closureDepId)}/closure`);
+  } catch (err) {
+    state.closure = null;
+    state.closureDepId = '';
+  }
+  renderClosure();
+}
+
+async function submitRelation(event) {
+  event.preventDefault();
+  clearNotice();
+  clearFieldMarks();
+  if (!state.relationDeps.length) {
+    notify('请先登记依赖，再登记关系', 'error');
+    return;
+  }
+  const payload = {
+    fromDepId: el('relation-from').value,
+    toDepId: el('relation-to').value,
+    minVersion: el('relation-min-version').value,
+  };
+  try {
+    await request('/api/relations', { method: 'POST', body: JSON.stringify(payload) });
+    el('relation-min-version').value = '';
+    notify('依赖关系已新增', 'ok');
+    await loadRelations();
+    await refreshClosure();
+  } catch (err) {
+    notify(err.message, 'error');
+    markField(err.field);
+  }
+}
+
+async function submitClosure(event) {
+  event.preventDefault();
+  clearNotice();
+  clearFieldMarks();
+  const depId = el('closure-dep').value;
+  if (!depId) {
+    notify('请先登记依赖，再展开清单', 'error');
+    return;
+  }
+  try {
+    state.closure = await request(`/api/deps/${encodeURIComponent(depId)}/closure`);
+    state.closureDepId = depId;
+    renderClosure();
+  } catch (err) {
+    state.closure = null;
+    state.closureDepId = '';
+    renderClosure();
+    notify(err.message, 'error');
+    markField(err.field);
+  }
 }
 
 function openDepForm(dep) {
@@ -272,6 +439,8 @@ async function submitDep(event) {
     closeDepForm();
     await loadProjects();
     await loadDeps();
+    await loadRelations();
+    await refreshClosure();
   } catch (err) {
     notify(err.message, 'error');
     markField(err.field);
@@ -306,6 +475,7 @@ document.addEventListener('click', async (event) => {
       }
       await loadProjects();
       await loadDeps();
+      await loadRelations();
     } catch (err) {
       notify(err.message, 'error');
     }
@@ -322,13 +492,31 @@ document.addEventListener('click', async (event) => {
   if (node.dataset.depDelete) {
     clearNotice();
     const found = state.deps.find((item) => item.id === node.dataset.depDelete);
-    if (!window.confirm(`确定删除登记 ${found ? found.name : ''} 吗？`)) return;
+    if (!window.confirm(`确定删除登记 ${found ? found.name : ''} 吗？与它相关的依赖关系会一起清掉`)) return;
     try {
       await request(`/api/deps/${encodeURIComponent(node.dataset.depDelete)}`, { method: 'DELETE' });
       if (state.editingId === node.dataset.depDelete) closeDepForm();
       notify('登记已删除', 'ok');
       await loadProjects();
       await loadDeps();
+      await loadRelations();
+      await refreshClosure();
+    } catch (err) {
+      notify(err.message, 'error');
+    }
+    return;
+  }
+
+  if (node.dataset.relationDelete) {
+    clearNotice();
+    const rel = state.relations.find((item) => item.id === node.dataset.relationDelete);
+    if (!rel) return;
+    if (!window.confirm(`确定删除「${rel.fromName} → ${rel.toName}」这条关系吗？`)) return;
+    try {
+      await request(`/api/relations/${encodeURIComponent(rel.id)}`, { method: 'DELETE' });
+      notify('关系已删除', 'ok');
+      await loadRelations();
+      await refreshClosure();
     } catch (err) {
       notify(err.message, 'error');
     }
@@ -337,6 +525,8 @@ document.addEventListener('click', async (event) => {
 
 el('project-form').addEventListener('submit', submitProject);
 el('dep-form').addEventListener('submit', submitDep);
+el('relation-form').addEventListener('submit', submitRelation);
+el('closure-form').addEventListener('submit', submitClosure);
 el('dep-new').addEventListener('click', () => {
   clearNotice();
   if (!state.projects.length) {
@@ -361,6 +551,8 @@ el('dep-refresh').addEventListener('click', () => {
   clearNotice();
   loadProjects()
     .then(loadDeps)
+    .then(loadRelations)
+    .then(refreshClosure)
     .catch((err) => notify(err.message, 'error'));
 });
 el('filter-project').addEventListener('change', () => {
@@ -376,9 +568,10 @@ el('operator').addEventListener('change', () => {
   window.localStorage.setItem(OPERATOR_KEY, currentOperator());
 });
 
-// 页面打开时先把项目与依赖登记拉一遍，项目决定登记表单里能选哪些归属
+// 页面打开时先把项目、依赖登记与依赖关系拉一遍，项目决定登记表单里能选哪些归属
 restoreOperator();
 loadHealth();
 loadProjects()
   .then(loadDeps)
+  .then(loadRelations)
   .catch((err) => notify(err.message, 'error'));
