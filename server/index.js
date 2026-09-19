@@ -84,6 +84,36 @@ app.delete('/api/deps/:id', (req, res) => {
   }
 });
 
+// 从某条登记出发一路往下需要的完整清单：按层展开，同一条只保留最早出现的那层
+app.get('/api/deps/:id/closure', (req, res) => {
+  try {
+    res.json(api.getClosure(req.params.id));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// 依赖关系：谁需要谁、最低版本要求多少
+app.get('/api/links', (_req, res) => {
+  res.json(api.listLinks());
+});
+
+app.post('/api/links', (req, res) => {
+  try {
+    res.status(201).json(api.createLink(req.body));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+app.delete('/api/links/:id', (req, res) => {
+  try {
+    res.json(api.deleteLink(req.params.id));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 // 未匹配到的接口路径统一返回说明，避免前端拿到一串页面内容
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: { code: 'API_NOT_FOUND', message: '接口不存在', field: '' } });

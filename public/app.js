@@ -3,6 +3,8 @@
 const state = {
   projects: [],
   deps: [],
+  links: [],
+  linkDeps: [],
   licenses: [],
   statuses: [],
   editingId: '',
@@ -122,6 +124,17 @@ async function loadDeps() {
   renderDeps();
 }
 
+// 关系清单与依赖登记表互相影响：关系区自己重绘，依赖表上的"需要谁/被谁需要"两列也要跟着刷新
+async function loadLinks() {
+  const payload = await request('/api/links');
+  state.links = payload.links || [];
+  state.linkDeps = payload.deps || [];
+  renderDeps();
+  renderLinks();
+  renderLinkOptions();
+  await refreshClosure();
+}
+
 function renderProjects() {
   const body = el('project-body');
   body.innerHTML = state.projects.map((item) => `<tr>
@@ -180,10 +193,30 @@ function projectName(projectId) {
   return found ? found.name : projectId;
 }
 
+// 每条依赖的两头关系：它需要谁（from 是自己）、被谁需要（to 是自己）
+function depRelations(depId) {
+  const requires = [];
+  const requiredBy = [];
+  state.links.forEach((link) => {
+    if (link.fromId === depId && link.to) requires.push(link.to);
+    if (link.toId === depId && link.from) requiredBy.push(link.from);
+  });
+  return { requires, requiredBy };
+}
+
+// 同名依赖可能分属不同项目，标签一律带上项目名才分得清
+function relationTags(list) {
+  if (!list.length) return '<span class="missing">无</span>';
+  return list
+    .map((dep) => `<span class="tag rel">${escapeHtml(dep.projectName)}/${escapeHtml(dep.name)}</span>`)
+    .join(' ');
+}
+
 function renderDeps() {
   const body = el('dep-body');
   body.innerHTML = state.deps.map((item) => {
     const statusTag = item.status === '已弃用' ? 'off' : 'on';
+    const rel = depRelations(item.id);
     return `<tr>
       <td>${escapeHtml(projectName(item.projectId))}</td>
       <td class="mono">${escapeHtml(item.name)}</td>
@@ -191,6 +224,8 @@ function renderDeps() {
       <td>${item.license ? escapeHtml(item.license) : '<span class="missing">未填</span>'}</td>
       <td>${item.owner ? escapeHtml(item.owner) : '<span class="missing">未指定</span>'}</td>
       <td><span class="tag ${statusTag}">${escapeHtml(item.status)}</span></td>
+      <td class="rel-cell">${relationTags(rel.requires)}</td>
+      <td class="rel-cell">${relationTags(rel.requiredBy)}</td>
       <td class="note-cell">${escapeHtml(item.note)}</td>
       <td class="mono">${escapeHtml(formatTime(item.updatedAt))}</td>
       <td class="actions">
@@ -200,6 +235,99 @@ function renderDeps() {
     </tr>`;
   }).join('');
   el('dep-empty').classList.toggle('hidden', state.deps.length > 0);
+}
+
+function depLabel(dep) {
+  return `${dep.projectName} / ${dep.name}@${dep.version}`;
+}
+
+function renderLinks() {
+  const body = el('link-body');
+  body.innerHTML = state.links.map((link) => `<tr>
+      <td>${link.from ? escapeHtml(depLabel(link.from)) : escapeHtml(link.fromId)}</td>
+      <td>${link.to ? escapeHtml(depLabel(link.to)) : escapeHtml(link.toId)}</td>
+      <td class="mono">${escapeHtml(link.minVersion)}</td>
+      <td class="mono">${escapeHtml(formatTime(link.createdAt))}</td>
+      <td class="actions">
+        <button type="button" class="link danger" data-link-delete="${escapeHtml(link.id)}">删除</button>
+      </td>
+    </tr>`).join('');
+  el('link-empty').classList.toggle('hidden', state.links.length > 0);
+}
+
+// 三个下拉框（关系两端、展开起点）共用一份全量依赖清单，按项目分组，不受筛选条件影响
+function renderLinkOptions() {
+  const byProject = new Map();
+  state.linkDeps.forEach((dep) => {
+    const key = dep.projectName || dep.projectId;
+    if (!byProject.has(key)) byProject.set(key, []);
+    byProject.get(key).push(dep);
+  });
+  const options = Array.from(byProject.entries())
+    .map(([projectName, deps]) => `<optgroup label="${escapeHtml(projectName)}">${
+      deps.map((dep) => `<option value="${escapeHtml(dep.id)}">${escapeHtml(dep.name)}@${escapeHtml(dep.version)}</option>`).join('')
+    }</optgroup>`)
+    .join('');
+
+  ['link-from', 'link-to', 'closure-dep'].forEach((id) => {
+    const select = el(id);
+    const current = select.value;
+    select.innerHTML = options;
+    if (state.linkDeps.some((dep) => dep.id === current)) select.value = current;
+  });
+}
+
+function renderClosure(result) {
+  const box = el('closure-result');
+  const rootLabel = depLabel(result.root);
+  if (!result.items.length) {
+    box.innerHTML = `<p class="closure-summary">${escapeHtml(rootLabel)} 没有需要其它依赖</p>`;
+    return;
+  }
+  const layers = new Map();
+  result.items.forEach((item) => {
+    if (!layers.has(item.depth)) layers.set(item.depth, []);
+    layers.get(item.depth).push(item);
+  });
+  const layerHtml = Array.from(layers.entries())
+    .map(([depth, items]) => {
+      const rows = items.map((item) => `<li>
+          <span class="mono">${escapeHtml(item.name)}@${escapeHtml(item.version)}</span>
+          <span class="closure-via">（${escapeHtml(item.projectName)}）· 最低版本 ${escapeHtml(item.minVersion)} · 第 ${item.depth} 层由 ${escapeHtml(item.viaProjectName)}/${escapeHtml(item.viaName)} 带入</span>
+        </li>`).join('');
+      return `<div class="closure-layer"><h4>第 ${depth} 层（${items.length} 条）</h4><ul>${rows}</ul></div>`;
+    }).join('');
+  box.innerHTML = `<p class="closure-summary">从 <b>${escapeHtml(rootLabel)}</b> 出发，一路往下共需要 ${result.items.length} 条依赖，最深 ${result.maxDepth} 层：</p>${layerHtml}`;
+}
+
+async function runClosure() {
+  clearNotice();
+  const depId = el('closure-dep').value;
+  if (!depId) {
+    notify('请先选择一条依赖再展开', 'error');
+    return;
+  }
+  try {
+    const result = await request(`/api/deps/${encodeURIComponent(depId)}/closure`);
+    el('closure-result').dataset.active = '1';
+    renderClosure(result);
+  } catch (err) {
+    notify(err.message, 'error');
+  }
+}
+
+// 关系或依赖变动之后，展开结果跟着刷新；起点被删掉就收起来
+async function refreshClosure() {
+  const box = el('closure-result');
+  const depId = el('closure-dep').value;
+  if (!box.dataset.active || !depId) return;
+  try {
+    const result = await request(`/api/deps/${encodeURIComponent(depId)}/closure`);
+    renderClosure(result);
+  } catch (err) {
+    box.innerHTML = '';
+    delete box.dataset.active;
+  }
 }
 
 function openDepForm(dep) {
@@ -272,6 +400,27 @@ async function submitDep(event) {
     closeDepForm();
     await loadProjects();
     await loadDeps();
+    await loadLinks();
+  } catch (err) {
+    notify(err.message, 'error');
+    markField(err.field);
+  }
+}
+
+async function submitLink(event) {
+  event.preventDefault();
+  clearNotice();
+  clearFieldMarks();
+  const payload = {
+    fromId: el('link-from').value,
+    toId: el('link-to').value,
+    minVersion: el('link-min-version').value,
+  };
+  try {
+    await request('/api/links', { method: 'POST', body: JSON.stringify(payload) });
+    el('link-min-version').value = '';
+    notify('关系已新增', 'ok');
+    await loadLinks();
   } catch (err) {
     notify(err.message, 'error');
     markField(err.field);
@@ -306,6 +455,7 @@ document.addEventListener('click', async (event) => {
       }
       await loadProjects();
       await loadDeps();
+      await loadLinks();
     } catch (err) {
       notify(err.message, 'error');
     }
@@ -322,13 +472,27 @@ document.addEventListener('click', async (event) => {
   if (node.dataset.depDelete) {
     clearNotice();
     const found = state.deps.find((item) => item.id === node.dataset.depDelete);
-    if (!window.confirm(`确定删除登记 ${found ? found.name : ''} 吗？`)) return;
+    if (!window.confirm(`确定删除登记 ${found ? found.name : ''} 吗？挂在它身上的关系会一起删掉`)) return;
     try {
-      await request(`/api/deps/${encodeURIComponent(node.dataset.depDelete)}`, { method: 'DELETE' });
+      const result = await request(`/api/deps/${encodeURIComponent(node.dataset.depDelete)}`, { method: 'DELETE' });
       if (state.editingId === node.dataset.depDelete) closeDepForm();
-      notify('登记已删除', 'ok');
+      notify(`登记已删除${result.removedLinks ? `，连同 ${result.removedLinks} 条关系一起删掉` : ''}`, 'ok');
       await loadProjects();
       await loadDeps();
+      await loadLinks();
+    } catch (err) {
+      notify(err.message, 'error');
+    }
+    return;
+  }
+
+  if (node.dataset.linkDelete) {
+    clearNotice();
+    if (!window.confirm('确定删除这条关系吗？')) return;
+    try {
+      await request(`/api/links/${encodeURIComponent(node.dataset.linkDelete)}`, { method: 'DELETE' });
+      notify('关系已删除', 'ok');
+      await loadLinks();
     } catch (err) {
       notify(err.message, 'error');
     }
@@ -337,6 +501,8 @@ document.addEventListener('click', async (event) => {
 
 el('project-form').addEventListener('submit', submitProject);
 el('dep-form').addEventListener('submit', submitDep);
+el('link-form').addEventListener('submit', submitLink);
+el('closure-run').addEventListener('click', runClosure);
 el('dep-new').addEventListener('click', () => {
   clearNotice();
   if (!state.projects.length) {
@@ -361,6 +527,7 @@ el('dep-refresh').addEventListener('click', () => {
   clearNotice();
   loadProjects()
     .then(loadDeps)
+    .then(loadLinks)
     .catch((err) => notify(err.message, 'error'));
 });
 el('filter-project').addEventListener('change', () => {
@@ -376,9 +543,11 @@ el('operator').addEventListener('change', () => {
   window.localStorage.setItem(OPERATOR_KEY, currentOperator());
 });
 
-// 页面打开时先把项目与依赖登记拉一遍，项目决定登记表单里能选哪些归属
+// 页面打开时先把项目、依赖登记与关系都拉一遍，项目决定登记表单里能选哪些归属，
+// 关系决定依赖表上的"需要谁/被谁需要"两列与关系区的下拉框
 restoreOperator();
 loadHealth();
 loadProjects()
   .then(loadDeps)
+  .then(loadLinks)
   .catch((err) => notify(err.message, 'error'));

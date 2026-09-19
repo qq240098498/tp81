@@ -169,8 +169,11 @@ function deleteDep(id) {
   const index = data.deps.findIndex((item) => item.id === id);
   if (index === -1) throw new ApiError(404, 'DEP_NOT_FOUND', '这条依赖登记不存在或已被删除', '');
   const [removed] = data.deps.splice(index, 1);
+  // 挂在这条登记上的关系（它需要的、需要它的）跟着一起删掉，不能留下指向空位的边
+  const before = data.links.length;
+  data.links = data.links.filter((link) => link.fromId !== removed.id && link.toId !== removed.id);
   save(data);
-  return { id: removed.id, name: removed.name };
+  return { id: removed.id, name: removed.name, removedLinks: before - data.links.length };
 }
 
 module.exports = {
@@ -181,4 +184,5 @@ module.exports = {
   deleteDep,
   validateName,
   validateVersion,
+  VERSION_PATTERN,
 };

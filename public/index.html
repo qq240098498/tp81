@@ -78,6 +78,8 @@
               <th>许可</th>
               <th>责任人</th>
               <th>状态</th>
+              <th>需要谁</th>
+              <th>被谁需要</th>
               <th>备注</th>
               <th>更新时间</th>
               <th>操作</th>
@@ -110,6 +112,54 @@
           <button type="button" id="dep-cancel" class="ghost">取消</button>
         </div>
       </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>依赖关系</h2>
+        <div class="panel-tip">登记每条依赖需要哪些其它依赖与最低版本；指向没登记的依赖、版本写法不成立、绕成一圈都会被当场拒绝</div>
+      </div>
+
+      <form class="inline-form" id="link-form" autocomplete="off">
+        <h3>新增关系</h3>
+        <label data-field="linkFrom">哪条依赖
+          <select id="link-from"></select>
+        </label>
+        <label data-field="linkTo">需要哪条依赖
+          <select id="link-to"></select>
+        </label>
+        <label data-field="minVersion">最低版本
+          <input id="link-min-version" placeholder="例如 2.7.0" maxlength="40">
+        </label>
+        <button type="submit">新增关系</button>
+      </form>
+
+      <div class="table-wrap">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th>哪条依赖</th>
+              <th>需要</th>
+              <th>最低版本</th>
+              <th>登记时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="link-body"></tbody>
+        </table>
+      </div>
+      <p class="empty-tip hidden" id="link-empty">还没有登记任何依赖关系</p>
+
+      <div class="closure-box">
+        <h3>完整需要清单</h3>
+        <div class="closure-controls">
+          <label data-field="closureDep">从哪条依赖出发
+            <select id="closure-dep"></select>
+          </label>
+          <button type="button" id="closure-run">展开完整清单</button>
+        </div>
+        <div id="closure-result"></div>
+      </div>
     </section>
   </main>
 

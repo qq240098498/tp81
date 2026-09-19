@@ -13,9 +13,10 @@ const MAX_NOTE_LENGTH = 200;
 const UNASSIGNED = '未指定';
 const STATUSES = ['在用', '待升', '已弃用'];
 
-// 初始数据：三个项目、十八条依赖登记。里面故意留了几种情况：
+// 初始数据：三个项目、十八条依赖登记、五条依赖关系。登记里故意留了几种情况：
 // 同一个依赖在两个项目里版本不一致、几条没写责任人、一条没写许可、
-// 一条停在待升状态很久、一条已经弃用，另一种是同一依赖只在单个项目里出现过
+// 一条停在待升状态很久、一条已经弃用，另一种是同一依赖只在单个项目里出现过；
+// 关系里既有单条的直接需要，也有 spring-boot → netty → protobuf-java 这样能往下展开两层的链条
 function seedData() {
   return {
     projects: [
@@ -42,6 +43,13 @@ function seedData() {
       { id: 'dep-2016', projectId: 'proj-1003', name: 'typescript', version: '5.2.2', license: 'Apache-2.0', owner: '王凯', status: '在用', note: '编译与类型检查', createdAt: '2026-08-28T04:10:00.000Z', updatedAt: '2026-09-08T07:40:00.000Z' },
       { id: 'dep-2017', projectId: 'proj-1003', name: 'vite', version: '5.0.10', license: 'MIT', owner: '王凯', status: '在用', note: '本地构建', createdAt: '2026-08-28T04:12:00.000Z', updatedAt: '2026-09-08T07:42:00.000Z' },
       { id: 'dep-2018', projectId: 'proj-1003', name: 'xml-parser', version: '0.9.2', license: 'GPL-3.0', owner: '', status: '在用', note: '解析对账文件用，许可需要复核', createdAt: '2026-09-01T02:00:00.000Z', updatedAt: '2026-09-08T07:50:00.000Z' },
+    ],
+    links: [
+      { id: 'link-3001', fromId: 'dep-2001', toId: 'dep-2004', minVersion: '2.12.0', createdAt: '2026-09-02T02:00:00.000Z' },
+      { id: 'link-3002', fromId: 'dep-2005', toId: 'dep-2004', minVersion: '2.10.0', createdAt: '2026-09-02T02:05:00.000Z' },
+      { id: 'link-3003', fromId: 'dep-2006', toId: 'dep-2007', minVersion: '4.1.90', createdAt: '2026-09-02T02:10:00.000Z' },
+      { id: 'link-3004', fromId: 'dep-2007', toId: 'dep-2010', minVersion: '3.20.0', createdAt: '2026-09-02T02:15:00.000Z' },
+      { id: 'link-3005', fromId: 'dep-2018', toId: 'dep-2015', minVersion: '1.10.0', createdAt: '2026-09-02T02:20:00.000Z' },
     ],
   };
 }
@@ -78,7 +86,40 @@ function normalizeDep(item, fallbackIndex) {
   };
 }
 
-// 整份数据保证 projects 与 deps 结构一致，指向不存在项目的登记一律丢掉
+// 把单条依赖关系整理成固定结构：fromId 这条登记需要 toId 这条登记，版本至少 minVersion
+function normalizeLink(item, fallbackIndex) {
+  const source = item && typeof item === 'object' ? item : {};
+  return {
+    id: typeof source.id === 'string' && source.id ? source.id : `link-restored-${fallbackIndex + 1}`,
+    fromId: typeof source.fromId === 'string' ? source.fromId : '',
+    toId: typeof source.toId === 'string' ? source.toId : '',
+    minVersion: typeof source.minVersion === 'string' ? source.minVersion.trim() : '',
+    createdAt: typeof source.createdAt === 'string' && source.createdAt ? source.createdAt : new Date().toISOString(),
+  };
+}
+
+// 沿"需要"方向从 startId 走到 targetId 的一条路径（含两端），走不到返回 null。
+// 新增 fromId → toId 之前，只要 toId 能走到 fromId，这条新关系就会绕成一圈
+function findRequirePath(links, startId, targetId) {
+  if (startId === targetId) return [startId];
+  const seen = new Set([startId]);
+  const queue = [[startId]];
+  while (queue.length) {
+    const path = queue.shift();
+    const last = path[path.length - 1];
+    for (const link of links) {
+      if (link.fromId !== last || seen.has(link.toId)) continue;
+      const next = path.concat(link.toId);
+      if (link.toId === targetId) return next;
+      seen.add(link.toId);
+      queue.push(next);
+    }
+  }
+  return null;
+}
+
+// 整份数据保证 projects、deps 与 links 结构一致：指向不存在项目的登记一律丢掉，
+// 关系里指向不存在登记、自己需要自己、重复以及会绕成一圈的也一律丢掉
 function normalize(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
   const seed = seedData();
@@ -106,7 +147,24 @@ function normalize(raw) {
         .filter((item) => known.has(item.projectId))
     : [];
 
-  return { projects: dedupedProjects, deps };
+  // 关系逐条收下：两端都必须是还存在的登记，同一对登记只留最早一条，
+  // 每收一条都确认不会绕成一圈，会成环的整条丢掉
+  const depIds = new Set(deps.map((item) => item.id));
+  const links = [];
+  const seenPairs = new Set();
+  const rawLinks = Array.isArray(source.links) ? source.links : [];
+  rawLinks.map((item, index) => normalizeLink(item, index)).forEach((link) => {
+    if (!link.id || !link.fromId || !link.toId) return;
+    if (link.fromId === link.toId) return;
+    if (!depIds.has(link.fromId) || !depIds.has(link.toId)) return;
+    const pair = `${link.fromId}->${link.toId}`;
+    if (seenPairs.has(pair)) return;
+    if (findRequirePath(links, link.toId, link.fromId)) return;
+    seenPairs.add(pair);
+    links.push(link);
+  });
+
+  return { projects: dedupedProjects, deps, links };
 }
 
 // 读取数据文件：文件缺失或内容损坏时回落到初始数据并立刻补写
@@ -136,6 +194,8 @@ module.exports = {
   normalize,
   normalizeProject,
   normalizeDep,
+  normalizeLink,
+  findRequirePath,
   STATUSES,
   UNASSIGNED,
   MAX_NAME_LENGTH,

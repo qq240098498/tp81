@@ -341,3 +341,78 @@ label.full input {
   display: flex;
   gap: 10px;
 }
+
+/* 依赖表上的"需要谁/被谁需要"两列：标签可以换行，内容长时不挤成一行 */
+td.rel-cell {
+  white-space: normal;
+  min-width: 140px;
+}
+
+.tag.rel {
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin: 1px 2px 1px 0;
+  white-space: nowrap;
+}
+
+/* 关系区的新增表单：下拉框按项目分组后选项偏长，给足宽度 */
+#link-form label {
+  min-width: 220px;
+}
+
+#link-form label[data-field="minVersion"] {
+  min-width: 140px;
+}
+
+.closure-box {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+
+.closure-box h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.closure-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.closure-controls label {
+  min-width: 260px;
+}
+
+.closure-summary {
+  margin: 12px 0 4px;
+  color: var(--ink-soft);
+}
+
+.closure-layer {
+  margin-top: 10px;
+}
+
+.closure-layer h4 {
+  margin: 0 0 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.closure-layer ul {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.closure-layer li {
+  padding: 2px 0;
+}
+
+.closure-via {
+  color: var(--ink-soft);
+  font-size: 12.5px;
+}
